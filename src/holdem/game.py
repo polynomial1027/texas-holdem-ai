@@ -71,6 +71,8 @@ class TexasHoldemGame:
         # heads-up 中，小盲位 preflop 先行动
         self.current_player_index = 0
 
+        self._advance_until_action_available_or_hand_over()
+
         return self.get_observation()
 
     def _post_blinds(self):
@@ -200,6 +202,9 @@ class TexasHoldemGame:
             self._showdown()
             reward = self._calculate_terminal_reward_for_player(player)
 
+        if not self.hand_over:
+            self._advance_until_action_available_or_hand_over()
+
         done = self.hand_over
 
         return self.get_observation(), reward, done, info
@@ -208,15 +213,48 @@ class TexasHoldemGame:
         """
         check 或 call 之后判断是否结束当前下注轮。
         """
-        player = self.get_current_player()
-        opponent = self.get_opponent()
-
-        both_equal = player.current_bet == opponent.current_bet
-
-        if both_equal:
+        if self._betting_round_complete():
             self._advance_street()
         else:
             self._switch_player()
+    def _active_players(self):
+        return [player for player in self.players if not player.folded]
+
+    def _betting_round_complete(self):
+        """
+        判断当前下注轮是否已经结束。
+
+        标准简化规则：
+        - 已弃牌玩家不参与判断。
+        - 对每个仍在牌局中的玩家：
+          如果他还没 all-in，就必须已经跟到当前最高下注。
+        - all-in 玩家即使下注额不足，也不再需要行动。
+        """
+        active_players = self._active_players()
+
+        if len(active_players) <= 1:
+            return True
+
+        highest_bet = max(player.current_bet for player in active_players)
+
+        for player in active_players:
+            if not player.is_all_in() and player.current_bet < highest_bet:
+                return False
+
+        return True
+
+    def _all_active_players_all_in(self):
+        active_players = self._active_players()
+        return active_players and all(player.is_all_in() for player in active_players)
+
+    def _finish_all_in_showdown(self):
+        """
+        当所有未弃牌玩家都已经 all-in 时，直接补齐公共牌并摊牌。
+        """
+        while self.street != "showdown":
+            self._advance_street()
+
+        self._showdown()
 
     def _advance_street(self):
         """
@@ -251,6 +289,59 @@ class TexasHoldemGame:
 
     def _switch_player(self):
         self.current_player_index = 1 - self.current_player_index
+
+    def _advance_until_action_available_or_hand_over(self):
+        """
+        如果当前玩家没有合法动作，例如已经 all-in，
+        就自动推进到下一个玩家、下一条街，或直接摊牌。
+
+        这个方法主要是为了避免强化学习训练时出现：
+        No legal actions available.
+        """
+        safety_counter = 0
+
+        while not self.hand_over:
+            if self._all_active_players_all_in():
+                self._finish_all_in_showdown()
+                return
+
+            legal_actions = self.get_legal_actions()
+
+            if legal_actions:
+                return
+
+            if self._betting_round_complete():
+                self._advance_street()
+            else:
+                self._switch_player()
+
+            if self.street == "showdown":
+                self._showdown()
+                return
+
+            safety_counter += 1
+
+            if safety_counter > 20:
+                debug_state = {
+                    "street": self.street,
+                    "current_player_index": self.current_player_index,
+                    "current_bet": self.current_bet,
+                    "pot": self.pot,
+                    "players": [
+                        {
+                            "name": player.name,
+                            "chips": player.chips,
+                            "current_bet": player.current_bet,
+                            "total_bet_this_hand": player.total_bet_this_hand,
+                            "folded": player.folded,
+                            "all_in": player.is_all_in(),
+                        }
+                        for player in self.players
+                    ],
+                }
+                raise RuntimeError(
+                    f"Failed to find available action. Debug state: {debug_state}"
+                )
 
     def _only_one_player_not_folded(self):
         active_players = [player for player in self.players if not player.folded]
