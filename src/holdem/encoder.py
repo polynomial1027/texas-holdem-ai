@@ -1,6 +1,7 @@
 import numpy as np
 
 from src.holdem.actions import Action
+from src.holdem.features import encode_poker_features, get_poker_feature_dim
 
 
 ACTION_TO_INDEX = {
@@ -123,12 +124,16 @@ def encode_observation(observation) -> np.ndarray:
     2维 ：双方当前下注 / 1000
     2维 ：双方是否 fold
     5维 ：legal action mask
+    31维：poker semantic features，包括当前牌型、对子结构、同花听牌、顺子听牌、高牌潜力等
 
     总维度：
-    52 + 52 + 5 + 1 + 1 + 2 + 2 + 2 + 5 = 122
+    122 + 31 = 153
     """
-    hole_cards_vec = encode_cards(observation["hole_cards"])
-    board_vec = encode_cards(observation["board"])
+    hole_cards = observation["hole_cards"]
+    board_cards = observation["board"]
+
+    hole_cards_vec = encode_cards(hole_cards)
+    board_vec = encode_cards(board_cards)
     street_vec = encode_street(observation["street"])
 
     pot_vec = np.array(
@@ -158,6 +163,11 @@ def encode_observation(observation) -> np.ndarray:
 
     legal_actions_vec = encode_legal_actions(observation["legal_actions"])
 
+    poker_features_vec = encode_poker_features(
+        hole_cards=hole_cards,
+        board_cards=board_cards,
+    )
+
     state = np.concatenate([
         hole_cards_vec,
         board_vec,
@@ -168,6 +178,7 @@ def encode_observation(observation) -> np.ndarray:
         current_bets_vec,
         folded_vec,
         legal_actions_vec,
+        poker_features_vec,
     ])
 
     return state.astype(np.float32)
@@ -177,7 +188,7 @@ def get_state_dim() -> int:
     """
     返回当前状态向量维度。
     """
-    return 122
+    return 122 + get_poker_feature_dim()
 
 
 def get_action_dim() -> int:
