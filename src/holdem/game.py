@@ -1,35 +1,274 @@
 from src.holdem.cards import Deck
 from src.holdem.player import Player
 from src.holdem.evaluator import evaluate_seven, hand_rank_name
+from src.holdem.actions import Action
 
 
 class TexasHoldemGame:
-    def __init__(self, players):
-        if len(players) < 2:
-            raise ValueError("Texas Hold'em requires at least 2 players.")
+    """
+    简化版两人德州扑克环境。
+
+    当前支持：
+    - 两名玩家
+    - 筹码
+    - 底池
+    - fold / check / call / bet / raise
+    - preflop / flop / turn / river / showdown
+    - reset() / step(action)
+
+    简化点：
+    - 暂时不区分大小盲位置轮换
+    - bet / raise 金额固定
+    - 不做复杂 side pot
+    """
+
+    STREET_ORDER = ["preflop", "flop", "turn", "river", "showdown"]
+
+    def __init__(
+        self,
+        players,
+        small_blind: int = 5,
+        big_blind: int = 10,
+        fixed_bet: int = 20,
+    ):
+        if len(players) != 2:
+            raise ValueError("This simplified environment currently supports exactly 2 players.")
+
         self.players = players
+        self.small_blind = small_blind
+        self.big_blind = big_blind
+        self.fixed_bet = fixed_bet
+
         self.deck = None
         self.board = []
+        self.pot = 0
+
+        self.street = "preflop"
+        self.current_player_index = 0
+        self.current_bet = 0
+        self.last_raiser_index = None
+        self.hand_over = False
+        self.winners = []
 
     def reset(self):
         self.deck = Deck()
         self.board = []
+        self.pot = 0
+
+        self.street = "preflop"
+        self.current_player_index = 0
+        self.current_bet = 0
+        self.last_raiser_index = None
+        self.hand_over = False
+        self.winners = []
 
         for player in self.players:
             player.reset_for_new_hand()
 
-    def deal_hole_cards(self):
+        self._post_blinds()
+        self._deal_hole_cards()
+
+        # heads-up 中，小盲位 preflop 先行动
+        self.current_player_index = 0
+
+        return self.get_observation()
+
+    def _post_blinds(self):
+        small_blind_player = self.players[0]
+        big_blind_player = self.players[1]
+
+        sb_paid = small_blind_player.bet(self.small_blind)
+        bb_paid = big_blind_player.bet(self.big_blind)
+
+        self.pot += sb_paid + bb_paid
+        self.current_bet = self.big_blind
+        self.last_raiser_index = 1
+
+    def _deal_hole_cards(self):
         for player in self.players:
             player.receive_cards(self.deck.deal(2))
 
-    def deal_board(self):
-        # 简化版：一次性发出5张公共牌
-        self.board = self.deck.deal(5)
+    def _deal_flop(self):
+        self.board.extend(self.deck.deal(3))
 
-    def showdown(self):
+    def _deal_turn(self):
+        self.board.extend(self.deck.deal(1))
+
+    def _deal_river(self):
+        self.board.extend(self.deck.deal(1))
+
+    def get_current_player(self):
+        return self.players[self.current_player_index]
+
+    def get_opponent(self):
+        return self.players[1 - self.current_player_index]
+
+    def get_legal_actions(self):
+        player = self.get_current_player()
+
+        if self.hand_over or player.folded or player.is_all_in():
+            return []
+
+        to_call = self.current_bet - player.current_bet
+
+        legal_actions = []
+
+        if to_call > 0:
+            legal_actions.append(Action.FOLD)
+            legal_actions.append(Action.CALL)
+
+            if player.chips > to_call:
+                legal_actions.append(Action.RAISE)
+        else:
+            legal_actions.append(Action.CHECK)
+
+            if player.chips > 0:
+                legal_actions.append(Action.BET)
+
+        return legal_actions
+
+    def step(self, action):
+        """
+        强化学习接口的核心。
+
+        输入：
+            action: Action 枚举，例如 Action.CALL
+
+        返回：
+            observation, reward, done, info
+        """
+        if self.hand_over:
+            return self.get_observation(), 0, True, {"message": "Hand already over."}
+
+        if isinstance(action, str):
+            action = Action(action)
+
+        legal_actions = self.get_legal_actions()
+
+        if action not in legal_actions:
+            raise ValueError(f"Illegal action {action}. Legal actions: {legal_actions}")
+
+        player = self.get_current_player()
+        opponent = self.get_opponent()
+
+        reward = 0
+        info = {
+            "street": self.street,
+            "player": player.name,
+            "action": action.value,
+        }
+
+        if action == Action.FOLD:
+            player.fold()
+            self.hand_over = True
+            self.winners = [opponent]
+            opponent.chips += self.pot
+            reward = -player.total_bet_this_hand
+            info["result"] = f"{player.name} folded. {opponent.name} wins pot."
+
+        elif action == Action.CHECK:
+            self._advance_after_non_aggressive_action()
+
+        elif action == Action.CALL:
+            to_call = self.current_bet - player.current_bet
+            paid = player.bet(to_call)
+            self.pot += paid
+            self._advance_after_non_aggressive_action()
+
+        elif action == Action.BET:
+            paid = player.bet(self.fixed_bet)
+            self.pot += paid
+            self.current_bet = player.current_bet
+            self.last_raiser_index = self.current_player_index
+            self._switch_player()
+
+        elif action == Action.RAISE:
+            to_call = self.current_bet - player.current_bet
+            raise_amount = self.fixed_bet
+            total_amount = to_call + raise_amount
+
+            paid = player.bet(total_amount)
+            self.pot += paid
+            self.current_bet = player.current_bet
+            self.last_raiser_index = self.current_player_index
+            self._switch_player()
+
+        if not self.hand_over and self._only_one_player_not_folded():
+            self._finish_by_fold()
+
+        if not self.hand_over and self.street == "showdown":
+            self._showdown()
+            reward = self._calculate_terminal_reward_for_player(player)
+
+        done = self.hand_over
+
+        return self.get_observation(), reward, done, info
+
+    def _advance_after_non_aggressive_action(self):
+        """
+        check 或 call 之后判断是否结束当前下注轮。
+        """
+        player = self.get_current_player()
+        opponent = self.get_opponent()
+
+        both_equal = player.current_bet == opponent.current_bet
+
+        if both_equal:
+            self._advance_street()
+        else:
+            self._switch_player()
+
+    def _advance_street(self):
+        """
+        进入下一阶段。
+        """
+        for player in self.players:
+            player.current_bet = 0
+
+        self.current_bet = 0
+        self.last_raiser_index = None
+
+        if self.street == "preflop":
+            self.street = "flop"
+            self._deal_flop()
+            self.current_player_index = 1
+
+        elif self.street == "flop":
+            self.street = "turn"
+            self._deal_turn()
+            self.current_player_index = 1
+
+        elif self.street == "turn":
+            self.street = "river"
+            self._deal_river()
+            self.current_player_index = 1
+
+        elif self.street == "river":
+            self.street = "showdown"
+
+        elif self.street == "showdown":
+            self._showdown()
+
+    def _switch_player(self):
+        self.current_player_index = 1 - self.current_player_index
+
+    def _only_one_player_not_folded(self):
+        active_players = [player for player in self.players if not player.folded]
+        return len(active_players) == 1
+
+    def _finish_by_fold(self):
+        active_player = [player for player in self.players if not player.folded][0]
+        self.hand_over = True
+        self.winners = [active_player]
+        active_player.chips += self.pot
+
+    def _showdown(self):
         results = []
 
         for player in self.players:
+            if player.folded:
+                continue
+
             seven_cards = player.hole_cards + self.board
             score, best_five = evaluate_seven(seven_cards)
 
@@ -41,41 +280,73 @@ class TexasHoldemGame:
             })
 
         best_score = max(result["score"] for result in results)
-        winners = [result for result in results if result["score"] == best_score]
+        winner_results = [
+            result for result in results
+            if result["score"] == best_score
+        ]
 
-        return results, winners
+        self.winners = [result["player"] for result in winner_results]
 
-    def play_one_hand(self, verbose=True):
-        self.reset()
-        self.deal_hole_cards()
-        self.deal_board()
+        split_amount = self.pot // len(self.winners)
 
-        results, winners = self.showdown()
+        for winner in self.winners:
+            winner.chips += split_amount
 
-        if verbose:
-            print("=" * 60)
-            print("Board:", self.board)
-            print("-" * 60)
+        self.hand_over = True
 
-            for result in results:
-                player = result["player"]
-                print(f"{player.name}")
-                print(f"  Hole Cards: {player.hole_cards}")
-                print(f"  Best Hand : {result['best_five']}")
-                print(f"  Rank      : {result['rank_name']}")
-                print(f"  Score     : {result['score']}")
-                print()
+    def _calculate_terminal_reward_for_player(self, player):
+        """
+        简化 reward：
+        赢了返回净收益，输了返回负投入。
+        """
+        if player in self.winners:
+            return self.pot - player.total_bet_this_hand
+        return -player.total_bet_this_hand
 
-            print("-" * 60)
+    def get_observation(self):
+        """
+        返回当前环境状态。
 
-            if len(winners) == 1:
-                print("Winner:", winners[0]["player"].name)
-            else:
-                print("Tie:", [winner["player"].name for winner in winners])
+        后面接强化学习时，可以把这个 dict 转成 numpy array / tensor。
+        """
+        player = self.get_current_player()
 
-            print("=" * 60)
+        return {
+            "street": self.street,
+            "current_player": player.name,
+            "hole_cards": player.hole_cards,
+            "board": self.board,
+            "pot": self.pot,
+            "current_bet": self.current_bet,
+            "player_chips": [p.chips for p in self.players],
+            "player_current_bets": [p.current_bet for p in self.players],
+            "player_folded": [p.folded for p in self.players],
+            "legal_actions": [action.value for action in self.get_legal_actions()],
+        }
 
-        return results, winners
+    def render(self):
+        print("=" * 70)
+        print(f"Street: {self.street}")
+        print(f"Board : {self.board}")
+        print(f"Pot   : {self.pot}")
+        print(f"Current bet: {self.current_bet}")
+        print("-" * 70)
+
+        for i, player in enumerate(self.players):
+            marker = " <-- current" if i == self.current_player_index and not self.hand_over else ""
+            print(f"{player.name}{marker}")
+            print(f"  Hole cards: {player.hole_cards}")
+            print(f"  Chips     : {player.chips}")
+            print(f"  Current bet: {player.current_bet}")
+            print(f"  Total bet : {player.total_bet_this_hand}")
+            print(f"  Folded    : {player.folded}")
+
+        if self.hand_over:
+            print("-" * 70)
+            print("Hand over.")
+            print("Winner(s):", [player.name for player in self.winners])
+
+        print("=" * 70)
 
 
 def create_default_game(num_players=2):
