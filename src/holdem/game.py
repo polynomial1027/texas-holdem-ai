@@ -49,6 +49,7 @@ class TexasHoldemGame:
         self.last_raiser_index = None
         self.hand_over = False
         self.winners = []
+        self.actions_this_street = 0
 
     def reset(self):
         self.deck = Deck()
@@ -61,6 +62,7 @@ class TexasHoldemGame:
         self.last_raiser_index = None
         self.hand_over = False
         self.winners = []
+        self.actions_this_street = 0
 
         for player in self.players:
             player.reset_for_new_hand()
@@ -160,6 +162,8 @@ class TexasHoldemGame:
             "action": action.value,
         }
 
+        self.actions_this_street += 1
+
         if action == Action.FOLD:
             player.fold()
             self.hand_over = True
@@ -217,6 +221,7 @@ class TexasHoldemGame:
             self._advance_street()
         else:
             self._switch_player()
+
     def _active_players(self):
         return [player for player in self.players if not player.folded]
 
@@ -224,24 +229,31 @@ class TexasHoldemGame:
         """
         判断当前下注轮是否已经结束。
 
-        标准简化规则：
+        简化规则：
         - 已弃牌玩家不参与判断。
-        - 对每个仍在牌局中的玩家：
-          如果他还没 all-in，就必须已经跟到当前最高下注。
-        - all-in 玩家即使下注额不足，也不再需要行动。
+        - 非 all-in 玩家必须已经跟到当前最高下注。
+        - 每个仍能行动的玩家至少需要行动过一次。
         """
         active_players = self._active_players()
 
         if len(active_players) <= 1:
             return True
 
+        players_who_can_act = [
+            player for player in active_players
+            if not player.is_all_in()
+        ]
+
+        if not players_who_can_act:
+            return True
+
         highest_bet = max(player.current_bet for player in active_players)
 
-        for player in active_players:
-            if not player.is_all_in() and player.current_bet < highest_bet:
+        for player in players_who_can_act:
+            if player.current_bet < highest_bet:
                 return False
 
-        return True
+        return self.actions_this_street >= len(players_who_can_act)
 
     def _all_active_players_all_in(self):
         active_players = self._active_players()
@@ -265,6 +277,7 @@ class TexasHoldemGame:
 
         self.current_bet = 0
         self.last_raiser_index = None
+        self.actions_this_street = 0
 
         if self.street == "preflop":
             self.street = "flop"
