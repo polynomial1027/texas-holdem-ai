@@ -5,6 +5,7 @@ import torch
 
 from src.holdem.cards import Card
 from src.holdem.encoder import encode_observation
+from src.holdem.features import analyze_draws
 from src.agents.dqn_agent import DQNAgent
 
 
@@ -220,6 +221,10 @@ def predict_action(
     )
 
     state = encode_observation(observation)
+    draw_analysis = analyze_draws(
+        hole_cards=hole_cards,
+        board_cards=board_cards,
+    )
 
     agent = DQNAgent()
     agent.load(model_path)
@@ -257,6 +262,7 @@ def predict_action(
         "q_values": q_value_dict,
         "legal_q_values": legal_q_value_dict,
         "observation": observation,
+        "draw_analysis": draw_analysis,
     }
 
 
@@ -311,6 +317,19 @@ def main():
     print("My current bet  :", obs["player_current_bets"][0])
     print("Opp current bet :", obs["player_current_bets"][1])
     print("Legal actions   :", result["legal_actions"])
+
+    draw_analysis = result["draw_analysis"]
+
+    print("-" * 70)
+    print("Hand analysis:")
+    print("Current hand    :", draw_analysis["current_hand"])
+    print("Target hands    :", ", ".join(draw_analysis["target_hands"]))
+    print("Draw types      :", ", ".join(draw_analysis["draw_types"]))
+    print("Useful cards    :", draw_analysis["useful_cards"])
+    print("Effective outs  :", draw_analysis["effective_outs"])
+    print("Flush quality   :", draw_analysis["flush_draw_quality"])
+    print("Straight draw   :", draw_analysis["straight_draw_type"])
+    print("Interpretation  :", draw_analysis["interpretation"])
 
     print("-" * 70)
     print("Q values:")

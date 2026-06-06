@@ -1,5 +1,6 @@
 import streamlit as st
 
+from src.holdem.features import analyze_draws
 from src.inference.predict_action import predict_action
 
 
@@ -89,6 +90,34 @@ def inject_css():
             background: rgba(255, 255, 255, 0.70);
             font-weight: 700;
         }
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin-top: 0.5rem;
+        }
+        .analysis-item {
+            border: 1px solid rgba(120, 120, 120, 0.20);
+            border-radius: 14px;
+            padding: 0.75rem 0.85rem;
+            background: rgba(255, 255, 255, 0.55);
+        }
+        .analysis-label {
+            color: #777;
+            font-size: 0.82rem;
+            margin-bottom: 0.2rem;
+        }
+        .analysis-value {
+            font-weight: 800;
+            font-size: 1.02rem;
+        }
+        .interpretation-box {
+            border-left: 4px solid rgba(20, 140, 90, 0.65);
+            padding: 0.75rem 0.95rem;
+            margin-top: 0.8rem;
+            border-radius: 12px;
+            background: rgba(20, 140, 90, 0.08);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -176,6 +205,49 @@ def render_q_values(q_values, legal_actions, recommended_action):
         )
 
         st.progress(progress_value)
+
+
+def render_hand_analysis(draw_info):
+    st.subheader("AI Hand Analysis")
+
+    target_hands = ", ".join(draw_info["target_hands"])
+    draw_types = ", ".join(draw_info["draw_types"])
+
+    st.markdown(
+        f"""
+        <div class="analysis-grid">
+            <div class="analysis-item">
+                <div class="analysis-label">Current Hand</div>
+                <div class="analysis-value">{draw_info["current_hand"]}</div>
+            </div>
+            <div class="analysis-item">
+                <div class="analysis-label">Target Hands</div>
+                <div class="analysis-value">{target_hands}</div>
+            </div>
+            <div class="analysis-item">
+                <div class="analysis-label">Draw Types</div>
+                <div class="analysis-value">{draw_types}</div>
+            </div>
+            <div class="analysis-item">
+                <div class="analysis-label">Effective Outs</div>
+                <div class="analysis-value">{draw_info["effective_outs"]}</div>
+            </div>
+            <div class="analysis-item">
+                <div class="analysis-label">Useful Cards</div>
+                <div class="analysis-value">{draw_info["useful_cards"]}</div>
+            </div>
+            <div class="analysis-item">
+                <div class="analysis-label">Draw Quality</div>
+                <div class="analysis-value">Flush: {draw_info["flush_draw_quality"]} / Straight: {draw_info["straight_draw_type"]}</div>
+            </div>
+        </div>
+        <div class="interpretation-box">
+            <b>Interpretation:</b><br>
+            {draw_info["interpretation"]}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def main():
@@ -396,6 +468,12 @@ def main():
         legal_actions = result["legal_actions"]
         q_values = result["q_values"]
 
+        observation = result["observation"]
+        draw_info = analyze_draws(
+            hole_cards=observation["hole_cards"],
+            board_cards=observation["board"],
+        )
+
         st.markdown(
             f"""
             <div class="result-box">
@@ -413,26 +491,29 @@ def main():
             render_q_values(q_values, legal_actions, recommended_action)
 
         with result_right:
-            st.subheader("Input Summary")
+            render_hand_analysis(draw_info)
 
-            summary_rows = [
-                ("Hole Cards", ", ".join(hole_cards)),
-                ("Board", ", ".join(board_cards) if board_cards else "None"),
-                ("Street", street),
-                ("Pot", str(pot)),
-                ("Current Bet", str(current_bet)),
-                ("My Current Bet", str(my_current_bet)),
-                ("Opponent Current Bet", str(opponent_current_bet)),
-                ("My Chips", str(my_chips)),
-                ("Opponent Chips", str(opponent_chips)),
-            ]
+        st.markdown("---")
+        st.subheader("Input Summary")
 
-            for label, value in summary_rows:
-                st.markdown(f"**{label}:** {value}")
+        summary_rows = [
+            ("Hole Cards", ", ".join(hole_cards)),
+            ("Board", ", ".join(board_cards) if board_cards else "None"),
+            ("Street", street),
+            ("Pot", str(pot)),
+            ("Current Bet", str(current_bet)),
+            ("My Current Bet", str(my_current_bet)),
+            ("Opponent Current Bet", str(opponent_current_bet)),
+            ("My Chips", str(my_chips)),
+            ("Opponent Chips", str(opponent_chips)),
+        ]
 
-            st.caption(
-                "Q value 越高表示模型在当前简化训练环境下越偏好该动作；非法动作不会被选择。"
-            )
+        for label, value in summary_rows:
+            st.markdown(f"**{label}:** {value}")
+
+        st.caption(
+            "Q value 越高表示模型在当前简化训练环境下越偏好该动作；非法动作不会被选择。"
+        )
 
 
 if __name__ == "__main__":
