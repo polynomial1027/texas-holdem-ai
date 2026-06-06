@@ -111,5 +111,10 @@ def train(
     print(f"Training finished. Final model saved to {final_path}")
 
 
+# if __name__ == "__main__":
+#     train(num_episodes=1000)
 if __name__ == "__main__":
-    train(num_episodes=1000)
+    train(
+        num_episodes=5000,
+        save_interval=1000,
+    )
