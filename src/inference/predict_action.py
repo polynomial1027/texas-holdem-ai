@@ -8,7 +8,17 @@ from src.holdem.encoder import encode_observation
 from src.agents.dqn_agent import DQNAgent
 
 
+
 ACTION_NAMES = ["fold", "check", "call", "bet", "raise"]
+
+
+# Expected number of board cards for each street
+EXPECTED_BOARD_COUNT = {
+    "preflop": 0,
+    "flop": 3,
+    "turn": 4,
+    "river": 5,
+}
 
 
 RANK_MAP = {
@@ -96,6 +106,12 @@ def get_legal_actions(my_current_bet: int, current_bet: int, my_chips: int):
     """
     to_call = current_bet - my_current_bet
 
+    if to_call < 0:
+        raise ValueError(
+            f"Invalid betting state: current_bet={current_bet} is smaller than "
+            f"my_current_bet={my_current_bet}."
+        )
+
     legal_actions = []
 
     if to_call > 0:
@@ -166,6 +182,25 @@ def predict_action(
 
     if len(board_cards) not in [0, 3, 4, 5]:
         raise ValueError("Board must contain 0, 3, 4, or 5 cards.")
+
+    if street not in EXPECTED_BOARD_COUNT:
+        raise ValueError(f"Unknown street: {street}")
+
+    expected_board_count = EXPECTED_BOARD_COUNT[street]
+
+    if len(board_cards) != expected_board_count:
+        raise ValueError(
+            f"Street {street} requires exactly {expected_board_count} board cards, "
+            f"but got {len(board_cards)}."
+        )
+
+    expected_current_bet = max(int(my_current_bet), int(opponent_current_bet))
+
+    if int(current_bet) != expected_current_bet:
+        raise ValueError(
+            f"current_bet must equal max(my_current_bet, opponent_current_bet) "
+            f"= {expected_current_bet}, but got {int(current_bet)}."
+        )
 
     all_cards = hole_cards + board_cards
 

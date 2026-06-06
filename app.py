@@ -27,6 +27,10 @@ EXPECTED_BOARD_COUNT = {
 }
 
 
+def get_expected_current_bet(my_current_bet, opponent_current_bet):
+    return max(int(my_current_bet), int(opponent_current_bet))
+
+
 def inject_css():
     st.markdown(
         """
@@ -309,6 +313,22 @@ def main():
                 step=5,
             )
 
+        expected_current_bet = get_expected_current_bet(
+            my_current_bet=my_current_bet,
+            opponent_current_bet=opponent_current_bet,
+        )
+
+        if int(current_bet) != expected_current_bet:
+            st.warning(
+                f"当前下注状态不一致：Current highest bet 应该等于 "
+                f"max(My current bet, Opponent current bet) = {expected_current_bet}，"
+                f"但现在输入的是 {int(current_bet)}。"
+            )
+        else:
+            st.success(
+                f"下注状态匹配：Current highest bet = {expected_current_bet}。"
+            )
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -331,6 +351,19 @@ def main():
             st.error(
                 f"输入状态不一致：当前 Street 是 {street}，公共牌数量必须是 "
                 f"{expected_count} 张；你现在选了 {actual_count} 张。"
+            )
+            return
+
+        expected_current_bet = get_expected_current_bet(
+            my_current_bet=my_current_bet,
+            opponent_current_bet=opponent_current_bet,
+        )
+
+        if int(current_bet) != expected_current_bet:
+            st.error(
+                f"输入状态不一致：Current highest bet 必须等于 "
+                f"max(My current bet, Opponent current bet) = {expected_current_bet}；"
+                f"你现在输入的是 {int(current_bet)}。"
             )
             return
 
