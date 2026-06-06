@@ -50,6 +50,7 @@ class TexasHoldemGame:
         self.hand_over = False
         self.winners = []
         self.actions_this_street = 0
+        self.starting_chips = [player.chips for player in self.players]
 
     def reset(self):
         self.deck = Deck()
@@ -66,6 +67,10 @@ class TexasHoldemGame:
 
         for player in self.players:
             player.reset_for_new_hand()
+
+        # 记录本手开始前的筹码，用于计算更接近真实 chip delta 的 terminal reward。
+        # 注意：这里必须在 posting blinds 之前记录，这样大小盲也会计入本手盈亏。
+        self.starting_chips = [player.chips for player in self.players]
 
         self._post_blinds()
         self._deal_hole_cards()
@@ -169,7 +174,6 @@ class TexasHoldemGame:
             self.hand_over = True
             self.winners = [opponent]
             opponent.chips += self.pot
-            reward = -player.total_bet_this_hand
             info["result"] = f"{player.name} folded. {opponent.name} wins pot."
 
         elif action == Action.CHECK:
@@ -204,10 +208,13 @@ class TexasHoldemGame:
 
         if not self.hand_over and self.street == "showdown":
             self._showdown()
-            reward = self._calculate_terminal_reward_for_player(player)
 
         if not self.hand_over:
             self._advance_until_action_available_or_hand_over()
+
+        if self.hand_over:
+            reward = self._calculate_terminal_reward_for_player(player)
+            info["terminal_reward"] = reward
 
         done = self.hand_over
 
@@ -400,12 +407,15 @@ class TexasHoldemGame:
 
     def _calculate_terminal_reward_for_player(self, player):
         """
-        简化 reward：
-        赢了返回净收益，输了返回负投入。
+        用 chip delta 计算 terminal reward。
+
+        reward = 本手结束后玩家筹码 - 本手开始前玩家筹码
+
+        这样 fold / call / raise / showdown / all-in 都统一由真实筹码变化决定，
+        比旧版的 -player.total_bet_this_hand 更接近扑克训练目标。
         """
-        if player in self.winners:
-            return self.pot - player.total_bet_this_hand
-        return -player.total_bet_this_hand
+        player_index = self.players.index(player)
+        return player.chips - self.starting_chips[player_index]
 
     def get_observation(self):
         """
